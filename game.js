@@ -12,16 +12,13 @@ const MODEL_URL =
 // Tuning
 const CALIBRATION_MS = 2000;
 const CALIBRATION_TIMEOUT_MS = 8000;
-const NOSE_GAIN = 5;        // nose shift (fraction of frame width) -> screen fraction
-const ROLL_GAIN = 1.4;      // head tilt (radians) -> screen fraction
-const SMOOTHING = 0.2;      // 0..1, lower = smoother
+const HEAD_RANGE = 0.15;    // nose shift (fraction of camera width) that reaches the screen edge
+const SMOOTH_TIME = 0.15;   // seconds; higher = smoother but laggier
 const FACE_LOST_MS = 600;
 const KEY_SPEED = 0.9;      // screen widths per second
 
 // Landmark indices
 const NOSE = 1;
-const RIGHT_EYE_OUTER = 33;
-const LEFT_EYE_OUTER = 263;
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("game");
@@ -93,9 +90,9 @@ window.addEventListener("keyup", (e) => {
 let landmarker = null;
 let cameraOn = false;
 let lastVideoTime = -1;
-let face = null;            // { noseX, noseY, roll } of latest detection
+let face = null;            // { noseX, noseY } of latest detection
 let lastFaceAt = 0;
-let center = { noseX: 0.5, roll: 0 };
+let center = { noseX: 0.5 };
 let headTarget = 0.5;       // desired player x (0..1) from head
 
 function cameraErrorMessage(err) {
@@ -151,19 +148,13 @@ function detect(now) {
   const lm = res.faceLandmarks?.[0];
   if (!lm) { face = null; return; }
 
-  const r = lm[RIGHT_EYE_OUTER], l = lm[LEFT_EYE_OUTER];
-  const roll = Math.atan2(
-    (l.y - r.y) * video.videoHeight,
-    (l.x - r.x) * video.videoWidth
-  );
-  face = { noseX: lm[NOSE].x, noseY: lm[NOSE].y, roll };
+  face = { noseX: lm[NOSE].x, noseY: lm[NOSE].y };
   lastFaceAt = now;
 
-  // Camera image is not mirrored: moving your head to your right lowers
-  // nose x, and tilting to your right lowers the roll angle.
-  const shift = -(face.noseX - center.noseX) * NOSE_GAIN;
-  const tilt = -(face.roll - center.roll) * ROLL_GAIN;
-  headTarget = clamp(0.5 + shift + tilt, 0, 1);
+  // Linear map: calibrated center -> screen center, HEAD_RANGE away -> edge.
+  // Camera image is not mirrored, so moving your head to your right lowers nose x.
+  const offset = -(face.noseX - center.noseX) / HEAD_RANGE;
+  headTarget = clamp(0.5 + offset * 0.5, 0, 1);
 }
 
 function drawPreview() {
@@ -196,17 +187,14 @@ function beginCalibration() {
 function updateCalibration(now) {
   if (face && now - lastFaceAt < 100) {
     if (!calib.firstFaceAt) calib.firstFaceAt = now;
-    calib.samples.push({ noseX: face.noseX, roll: face.roll });
+    calib.samples.push(face.noseX);
   }
   if (calib.firstFaceAt) {
     const left = Math.max(0, CALIBRATION_MS - (now - calib.firstFaceAt));
     messageEl.textContent = `Look straight at the camera… ${Math.ceil(left / 1000)}`;
     if (left === 0 && calib.samples.length >= 5) {
       const n = calib.samples.length;
-      center = {
-        noseX: calib.samples.reduce((s, x) => s + x.noseX, 0) / n,
-        roll: calib.samples.reduce((s, x) => s + x.roll, 0) / n,
-      };
+      center = { noseX: calib.samples.reduce((s, x) => s + x, 0) / n };
       startRound();
     }
   } else if (now - calib.started > CALIBRATION_TIMEOUT_MS) {
@@ -253,7 +241,7 @@ function update(dt, now) {
   if (dir) {
     player.x = clamp(player.x + dir * KEY_SPEED * dt, 0, 1);
   } else if (faceVisible(now)) {
-    player.x += (headTarget - player.x) * SMOOTHING;
+    player.x += (headTarget - player.x) * (1 - Math.exp(-dt / SMOOTH_TIME));
   }
 
   // Face-lost notice (only when the camera is actually on).
