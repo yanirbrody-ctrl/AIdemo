@@ -77,7 +77,25 @@ html, body {
 
 .panel h1 { margin: 0 0 12px; font-size: 36px; }
 .panel p { line-height: 1.45; }
+#message { white-space: pre-line; }
 .hint { opacity: 0.7; font-size: 14px; }
+
+.modes {
+  display: inline-flex;
+  margin-top: 6px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid #3a4066;
+}
+.modes button {
+  border-radius: 0;
+  background: transparent;
+  color: #b8bfe6;
+}
+.modes button.selected {
+  background: #3a4066;
+  color: #fff;
+}
 
 .buttons {
   display: flex;

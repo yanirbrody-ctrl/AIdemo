@@ -10,7 +10,6 @@
   <canvas id="game"></canvas>
 
   <div id="hud">
-    <span>Score: <b id="score">0</b></span>
     <span>Best: <b id="best">0</b></span>
   </div>
 
@@ -24,12 +23,17 @@
   <div id="overlay">
     <div class="panel">
       <h1 id="title">Head Dodge</h1>
-      <p id="message">Move or tilt your head left and right to dodge the falling blocks. Grab stars for bonus points.</p>
+      <p id="message">Move your head left and right to dodge the falling blocks. Grab stars for bonus points.</p>
+      <div id="modes" class="modes">
+        <button class="mode selected" data-mode="1">1 Player</button>
+        <button class="mode" data-mode="2">2 Players</button>
+      </div>
       <div class="buttons">
         <button id="start-btn">Start</button>
-        <button id="keys-btn" class="secondary">Play with arrow keys</button>
+        <button id="keys-btn" class="secondary">Keyboard only</button>
+        <button id="menu-btn" class="secondary" hidden>Menu</button>
       </div>
-      <p class="hint">Arrow keys (or A / D) always work too.</p>
+      <p id="hint" class="hint"></p>
     </div>
   </div>
 
