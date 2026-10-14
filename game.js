@@ -94,6 +94,7 @@ let face = null;            // { noseX, noseY } of latest detection
 let lastFaceAt = 0;
 let center = { noseX: 0.5 };
 let headTarget = 0.5;       // desired player x (0..1) from head
+let faceCrop = null;        // { cx, cy, size } square around the face, video pixels, smoothed
 
 function cameraErrorMessage(err) {
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia)
@@ -150,11 +151,31 @@ function detect(now) {
 
   face = { noseX: lm[NOSE].x, noseY: lm[NOSE].y };
   lastFaceAt = now;
+  updateFaceCrop(lm);
 
   // Linear map: calibrated center -> screen center, HEAD_RANGE away -> edge.
   // Camera image is not mirrored, so moving your head to your right lowers nose x.
   const offset = -(face.noseX - center.noseX) / HEAD_RANGE;
   headTarget = clamp(0.5 + offset * 0.5, 0, 1);
+}
+
+// Square crop around the face landmarks, smoothed so the face avatar doesn't jitter.
+function updateFaceCrop(lm) {
+  let minX = 1, maxX = 0, minY = 1, maxY = 0;
+  for (const p of lm) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const box = {
+    cx: ((minX + maxX) / 2) * vw,
+    cy: ((minY + maxY) / 2) * vh,
+    size: Math.max((maxX - minX) * vw, (maxY - minY) * vh) * 1.25,
+  };
+  if (!faceCrop) faceCrop = box;
+  else for (const k in box) faceCrop[k] += (box[k] - faceCrop[k]) * 0.35;
 }
 
 function drawPreview() {
@@ -204,13 +225,16 @@ function updateCalibration(now) {
 }
 
 // ---------- Game ----------
-let state = "menu"; // menu | loading | calibrating | playing | over
+let state = "menu"; // menu | loading | calibrating | playing | crashing | over
 let player, obstacles, stars, score, elapsed, spawnTimer, starTimer;
+let crack = null;   // { t, lines: [[{x,y}...]...] } — crack polylines relative to player center
+const CRASH_MS = 1000;
 
 function startRound() {
   hideOverlay();
   state = "playing";
-  player = { x: 0.5, r: 22 };
+  player = { x: 0.5, r: 34 };
+  crack = null;
   obstacles = [];
   stars = [];
   score = 0;
@@ -263,12 +287,11 @@ function update(dt, now) {
   }
 
   const fall = 220 * sf * dt;
-  const px = player.x * (W - 2 * player.r) + player.r;
-  const py = H - 50;
+  const [px, py] = playerPos();
 
   for (const o of obstacles) {
     o.y += fall;
-    if (circleRect(px, py, player.r * 0.85, o)) return gameOver();
+    if (circleRect(px, py, player.r * 0.85, o)) return startCrash(px, py, o);
   }
   obstacles = obstacles.filter((o) => o.y < H + 50);
 
@@ -283,6 +306,49 @@ function update(dt, now) {
 
   score += dt * 10;
   scoreEl.textContent = Math.floor(score);
+}
+
+function playerPos() {
+  return [player.x * (W - 2 * player.r) + player.r, H - 60];
+}
+
+// Freeze the game and grow cracks out from the impact point, then game over.
+function startCrash(px, py, o) {
+  state = "crashing";
+  const r = player.r;
+  const dx = clamp(px, o.x, o.x + o.w) - px;
+  const dy = clamp(py, o.y, o.y + o.h) - py;
+  const d = Math.hypot(dx, dy) || 1;
+  const ix = (dx / d) * r * 0.45, iy = (dy / d) * r * 0.45;
+
+  const lines = [];
+  const n = 9;
+  for (let i = 0; i < n; i++) {
+    let a = (i / n) * Math.PI * 2 + Math.random() * 0.5;
+    let x = ix, y = iy;
+    const pts = [{ x, y }];
+    while (Math.hypot(x, y) < r * 1.1) {
+      a += (Math.random() - 0.5) * 0.7;
+      const step = r * (0.15 + Math.random() * 0.2);
+      x += Math.cos(a) * step;
+      y += Math.sin(a) * step;
+      pts.push({ x, y });
+    }
+    lines.push(pts);
+  }
+  // Ring cracks connecting neighbouring radial lines.
+  for (const k of [1, 2]) {
+    for (let i = 0; i < n; i++) {
+      const p = lines[i][k], q = lines[(i + 1) % n][k];
+      if (p && q && Math.random() < 0.7) lines.push([p, q]);
+    }
+  }
+  crack = { t: 0, lines };
+}
+
+function updateCrash(dt) {
+  crack.t += dt;
+  if (crack.t * 1000 >= CRASH_MS) gameOver();
 }
 
 function gameOver() {
@@ -308,12 +374,85 @@ function render() {
 
   for (const s of stars) drawStar(s.x, s.y, s.r);
 
-  const px = player.x * (W - 2 * player.r) + player.r;
-  const py = H - 50;
-  ctx.fillStyle = "#4fd1ff";
+  let [px, py] = playerPos();
+  if (crack && crack.t < 0.3) px += Math.sin(crack.t * 90) * 6 * (1 - crack.t / 0.3); // shake
+  drawPlayer(px, py, player.r);
+}
+
+function drawPlayer(px, py, r) {
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(px, py, player.r, 0, Math.PI * 2);
+  ctx.arc(px, py, r, 0, Math.PI * 2);
+  ctx.clip();
+
+  if (cameraOn && faceCrop && video.readyState >= 2) {
+    // Live face, mirrored like the preview.
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const size = Math.min(faceCrop.size, vw, vh);
+    const sx = clamp(faceCrop.cx - size / 2, 0, vw - size);
+    const sy = clamp(faceCrop.cy - size / 2, 0, vh - size);
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, sx, sy, size, size, -r, -r, 2 * r, 2 * r);
+    ctx.restore();
+  } else {
+    drawSmiley(px, py, r);
+  }
+
+  if (crack) drawCracks(px, py, r);
+  ctx.restore();
+
+  // Glowing outline (turns red on impact).
+  ctx.save();
+  const color = crack ? "#ff4d6d" : "#4fd1ff";
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 24;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(px, py, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.stroke(); // second pass makes the glow stronger
+  ctx.restore();
+}
+
+function drawSmiley(x, y, r) {
+  ctx.fillStyle = "#ffd84d";
+  ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+  ctx.fillStyle = "#2a2140";
+  ctx.beginPath();
+  ctx.arc(x - r * 0.35, y - r * 0.25, r * 0.12, 0, Math.PI * 2);
+  ctx.arc(x + r * 0.35, y - r * 0.25, r * 0.12, 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = "#2a2140";
+  ctx.lineWidth = r * 0.1;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.arc(x, y + r * 0.05, r * 0.5, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.stroke();
+}
+
+function drawCracks(px, py, r) {
+  const grow = Math.min(1, crack.t / 0.25);
+  // Brief white flash on impact.
+  const flash = Math.max(0, 0.6 * (1 - crack.t / 0.3));
+  if (flash) {
+    ctx.fillStyle = `rgba(255,255,255,${flash})`;
+    ctx.fillRect(px - r, py - r, 2 * r, 2 * r);
+  }
+  ctx.lineJoin = "round";
+  for (const [width, style] of [[3, "rgba(0,0,0,0.45)"], [1.4, "rgba(255,255,255,0.95)"]]) {
+    ctx.lineWidth = width;
+    ctx.strokeStyle = style;
+    ctx.beginPath();
+    for (const pts of crack.lines) {
+      const count = Math.max(2, Math.ceil(pts.length * grow));
+      ctx.moveTo(px + pts[0].x, py + pts[0].y);
+      for (let i = 1; i < Math.min(count, pts.length); i++) ctx.lineTo(px + pts[i].x, py + pts[i].y);
+    }
+    ctx.stroke();
+  }
 }
 
 function drawStar(x, y, r) {
@@ -382,6 +521,7 @@ function frame(now) {
 
   if (state === "calibrating") updateCalibration(now);
   else if (state === "playing") update(dt, now);
+  else if (state === "crashing") updateCrash(dt);
 
   render();
   requestAnimationFrame(frame);
