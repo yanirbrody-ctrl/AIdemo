@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Head Dodge</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <span>Score: <b id="score">0</b></span>
+    <span>Best: <b id="best">0</b></span>
+  </div>
+
+  <div id="status" hidden></div>
+
+  <div id="preview-wrap" hidden>
+    <canvas id="preview" width="200" height="150"></canvas>
+  </div>
+  <video id="video" playsinline muted hidden></video>
+
+  <div id="overlay">
+    <div class="panel">
+      <h1 id="title">Head Dodge</h1>
+      <p id="message">Move or tilt your head left and right to dodge the falling blocks. Grab stars for bonus points.</p>
+      <div class="buttons">
+        <button id="start-btn">Start</button>
+        <button id="keys-btn" class="secondary">Play with arrow keys</button>
+      </div>
+      <p class="hint">Arrow keys (or A / D) always work too.</p>
+    </div>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
